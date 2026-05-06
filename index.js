@@ -5,7 +5,6 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const NOTIFY_EMAIL  = process.env.NOTIFY_EMAIL;
 const SENDER_EMAIL  = process.env.SENDER_EMAIL;
 
-// List → Template mapping for email notifications
 const LIST_RULES = [
   { listId: 41, templateId: 86, name: 'Global Leads' },
   { listId: 42, templateId: 87, name: 'Enterprise Leads' },
@@ -27,12 +26,21 @@ const BREVO_HEADERS = {
 };
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000;
-let lastChecked = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
+
+// Track last checked time per list to avoid mixing polls
+const lastCheckedMap = {};
+LIST_RULES.forEach(r => {
+  lastCheckedMap[r.listId] = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
+});
+let lastCheckedAllContacts = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
 
 // ─────────────────────────────────────────
 // SYNC 1: All new contacts → BREVO_ID + SMS
 // ─────────────────────────────────────────
 async function syncAllNewContacts() {
+  const since = lastCheckedAllContacts;
+  lastCheckedAllContacts = new Date().toISOString(); // update immediately
+
   let allContacts = [];
   let offset = 0;
   const limit = 100;
@@ -46,7 +54,7 @@ async function syncAllNewContacts() {
     const contacts = res.data.contacts || [];
     if (contacts.length === 0) break;
 
-    const recent = contacts.filter(c => new Date(c.createdAt) >= new Date(lastChecked));
+    const recent = contacts.filter(c => new Date(c.createdAt) >= new Date(since));
     allContacts = allContacts.concat(recent);
 
     if (recent.length < contacts.length) break;
@@ -88,21 +96,22 @@ async function syncAllNewContacts() {
 }
 
 // ─────────────────────────────────────────
-// SYNC 2: Specific lists → Send email template
+// SYNC 2: List-specific → Send email template
 // ─────────────────────────────────────────
 async function syncListEmails() {
   if (!NOTIFY_EMAIL || !SENDER_EMAIL) {
-    console.log('   ⚠️  NOTIFY_EMAIL or SENDER_EMAIL not set — skipping email sync');
+    console.log('   ⚠️  NOTIFY_EMAIL or SENDER_EMAIL not set — skipping');
     return;
   }
 
   for (const rule of LIST_RULES) {
     const { listId, templateId, name } = rule;
+    const since = lastCheckedMap[listId];
+    lastCheckedMap[listId] = new Date().toISOString(); // update per list
 
-    // Fetch contacts recently added to this list
+    let newContacts = [];
     let offset = 0;
     const limit = 100;
-    const newContacts = [];
 
     while (true) {
       const res = await axios.get(
@@ -114,7 +123,7 @@ async function syncListEmails() {
       if (contacts.length === 0) break;
 
       const recent = contacts.filter(c =>
-        new Date(c.modifiedAt || c.createdAt) >= new Date(lastChecked)
+        new Date(c.modifiedAt || c.createdAt) >= new Date(since)
       );
       newContacts.push(...recent);
 
@@ -127,10 +136,19 @@ async function syncListEmails() {
     console.log(`   List "${name}" (${listId}): ${newContacts.length} new contact(s) → Template ${templateId}`);
 
     for (const contact of newContacts) {
-      const { id, email, attributes } = contact;
+      const { email } = contact;
       if (!email) continue;
 
       try {
+        // Fetch FULL contact details to get all attributes
+        const fullRes = await axios.get(
+          `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+          { headers: BREVO_HEADERS }
+        );
+        const full   = fullRes.data;
+        const attrs  = full.attributes || {};
+        const fullId = full.id;
+
         await axios.post(
           'https://api.brevo.com/v3/smtp/email',
           {
@@ -138,18 +156,20 @@ async function syncListEmails() {
             to: [{ name: 'Kuldeep', email: NOTIFY_EMAIL }],
             templateId,
             params: {
-              FIRSTNAME:   attributes?.FIRSTNAME        || '',
-              LASTNAME:    attributes?.LASTNAME         || '',
-              EMAIL:       email                        || '',
-              PHONE:       attributes?.SMS              || attributes?.MOBILEPHONENUMBER || '',
-              MESSAGE:     attributes?.ADDITIONAL_NOTES || '',
-              CONTACT_URL: `https://app.brevo.com/contact/index/${id}`
+              FIRSTNAME:   attrs.FIRSTNAME        || '',
+              LASTNAME:    attrs.LASTNAME         || '',
+              EMAIL:       email                  || '',
+              PHONE:       attrs.SMS              || attrs.MOBILEPHONENUMBER || '',
+              MESSAGE:     attrs.ADDITIONAL_NOTES || '',
+              CONTACT_URL: `https://app.brevo.com/contact/index/${fullId}`
             }
           },
           { headers: BREVO_HEADERS }
         );
-        console.log(`   📧 Email sent for ${email}`);
+
+        console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME}`);
         await new Promise(r => setTimeout(r, 200));
+
       } catch (err) {
         console.error(`   ❌ Email failed for ${email}:`, err.response?.data || err.message);
       }
@@ -163,13 +183,8 @@ async function syncListEmails() {
 async function poll() {
   try {
     console.log(`\n⚡ [${new Date().toISOString()}] Polling...`);
-
-    // Run both independently
     await syncAllNewContacts();
     await syncListEmails();
-
-    lastChecked = new Date().toISOString();
-
   } catch (err) {
     console.error('❌ Poll error:', err.response?.data || err.message);
   }
