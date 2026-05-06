@@ -53,8 +53,8 @@ async function getCompanyFromHubSpot(email) {
   }
 }
 
-// Get all Brevo contacts missing COMPANYNAME
-async function getBrevoContactsMissingCompany() {
+// Get ALL Brevo contacts
+async function getAllBrevoContacts() {
   let allContacts = [];
   let offset = 0;
   const limit = 100;
@@ -68,9 +68,7 @@ async function getBrevoContactsMissingCompany() {
     const contacts = res.data.contacts || [];
     if (contacts.length === 0) break;
 
-    // Only process contacts without COMPANYNAME
-    const missing = contacts.filter(c => !c.attributes?.COMPANYNAME);
-    allContacts = allContacts.concat(missing);
+    allContacts = allContacts.concat(contacts);
 
     offset += limit;
     if (contacts.length < limit) break;
@@ -92,8 +90,8 @@ async function poll() {
   try {
     console.log(`\n🔍 [${new Date().toISOString()}] Checking contacts missing COMPANYNAME...`);
 
-    const contacts = await getBrevoContactsMissingCompany();
-    console.log(`   Found ${contacts.length} contact(s) without COMPANYNAME`);
+    const contacts = await getAllBrevoContacts();
+    console.log(`   Found ${contacts.length} total contact(s) to process`);
 
     if (contacts.length === 0) return;
 
