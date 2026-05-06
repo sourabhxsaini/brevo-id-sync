@@ -1,9 +1,9 @@
 require('dotenv').config();
 const axios = require('axios');
 
-const BREVO_API_KEY  = process.env.BREVO_API_KEY;
+const BREVO_API_KEY   = process.env.BREVO_API_KEY;
 const HUBSPOT_API_KEY = process.env.HUBSPOT_API_KEY;
-const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours (16k contacts is heavy)
+const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
 
 if (!BREVO_API_KEY || !HUBSPOT_API_KEY) {
   console.error('❌ Missing BREVO_API_KEY or HUBSPOT_API_KEY env vars!');
@@ -29,43 +29,36 @@ async function buildHubSpotCompanyMap() {
   console.log('📥 Fetching all HubSpot contacts...');
 
   while (true) {
-    const params = {
-      limit: 100,
-      properties: ['email', 'company'],
-    };
-    if (after) params.after = after;
+    // Build URL with properties as repeated query params (HubSpot requirement)
+    let url = `https://api.hubapi.com/crm/v3/objects/contacts?limit=100&properties=email&properties=company`;
+    if (after) url += `&after=${after}`;
 
-    const res = await axios.get(
-      'https://api.hubapi.com/crm/v3/objects/contacts',
-      { headers: HUBSPOT_HEADERS, params }
-    );
-
+    const res = await axios.get(url, { headers: HUBSPOT_HEADERS });
     const results = res.data.results || [];
 
     for (const contact of results) {
-      const email   = contact.properties?.email?.toLowerCase();
+      const email   = contact.properties?.email?.toLowerCase().trim();
       const company = contact.properties?.company;
       if (email && company) {
         emailToCompany[email] = company;
       }
     }
 
-    console.log(`   Page ${page} — ${results.length} contacts fetched (total mapped: ${Object.keys(emailToCompany).length})`);
+    console.log(`   Page ${page} — ${results.length} fetched (mapped: ${Object.keys(emailToCompany).length})`);
     page++;
 
     after = res.data.paging?.next?.after;
     if (!after) break;
 
-    // Small delay to respect HubSpot rate limits
     await new Promise(r => setTimeout(r, 150));
   }
 
   console.log(`✅ HubSpot map built — ${Object.keys(emailToCompany).length} contacts with company`);
-  
-  // Debug: show first 5 emails from HubSpot map
-  const sample = Object.keys(emailToCompany).slice(0, 5);
-  console.log('   Sample HubSpot emails:', sample);
-  
+
+  // Show sample to verify
+  const sample = Object.entries(emailToCompany).slice(0, 3);
+  console.log('   Sample:', sample.map(([e, c]) => `${e} → ${c}`).join(', '));
+
   return emailToCompany;
 }
 
@@ -88,7 +81,7 @@ async function getAllBrevoContacts() {
     if (contacts.length === 0) break;
 
     allContacts = allContacts.concat(contacts);
-    console.log(`   Page ${page} — ${contacts.length} contacts fetched (total: ${allContacts.length})`);
+    console.log(`   Page ${page} — ${contacts.length} fetched (total: ${allContacts.length})`);
     page++;
 
     offset += limit;
@@ -97,12 +90,12 @@ async function getAllBrevoContacts() {
     await new Promise(r => setTimeout(r, 100));
   }
 
-  console.log(`✅ Brevo total contacts: ${allContacts.length}`);
-  
-  // Debug: show first 5 emails from Brevo
-  const sample = allContacts.slice(0, 5).map(c => c.email);
-  console.log('   Sample Brevo emails:', sample);
-  
+  console.log(`✅ Brevo total: ${allContacts.length} contacts`);
+
+  // Show sample to verify
+  const sample = allContacts.slice(0, 3).map(c => c.email);
+  console.log('   Sample:', sample.join(', '));
+
   return allContacts;
 }
 
@@ -120,10 +113,7 @@ async function poll() {
     console.log(`\n🚀 [${new Date().toISOString()}] Starting company sync...`);
     const startTime = Date.now();
 
-    // Build HubSpot map first (bulk fetch)
-    const hubspotMap = await buildHubSpotCompanyMap();
-
-    // Fetch all Brevo contacts
+    const hubspotMap    = await buildHubSpotCompanyMap();
     const brevoContacts = await getAllBrevoContacts();
 
     console.log(`\n🔄 Syncing company names...`);
@@ -134,7 +124,7 @@ async function poll() {
     let failed   = 0;
 
     for (const contact of brevoContacts) {
-      const email = contact.email?.toLowerCase();
+      const email = contact.email?.toLowerCase().trim();
       if (!email) continue;
 
       const companyName = hubspotMap[email];
@@ -158,7 +148,6 @@ async function poll() {
           console.log(`   ⏳ Progress: ${updated} updated so far...`);
         }
 
-        // Respect Brevo rate limit: 10 RPS = 100ms delay
         await new Promise(r => setTimeout(r, 100));
 
       } catch (err) {
@@ -186,7 +175,7 @@ async function poll() {
 
 async function main() {
   console.log('🚀 Brevo ↔ HubSpot Company Sync started');
-  console.log(`   Polling every ${POLL_INTERVAL_MS / 3600000} hours for 16k contacts\n`);
+  console.log(`   Polling every ${POLL_INTERVAL_MS / 3600000} hours\n`);
   await poll();
   setInterval(poll, POLL_INTERVAL_MS);
 }
