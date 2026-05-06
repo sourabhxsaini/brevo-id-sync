@@ -4,80 +4,82 @@ const axios = require('axios');
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const POLL_INTERVAL_MS = 2 * 60 * 1000; // every 2 minutes
 
+if (!BREVO_API_KEY) {
+  console.error('❌ BREVO_API_KEY is missing! Add it as an environment variable.');
+  process.exit(1);
+}
+
+console.log('✅ BREVO_API_KEY found, starting...');
+
 const headers = {
   'api-key': BREVO_API_KEY,
   'Content-Type': 'application/json'
 };
 
-// Track last checked time
 let lastChecked = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
 
 async function getRecentContacts() {
-  try {
-    const res = await axios.get('https://api.brevo.com/v3/contacts', {
-      headers,
-      params: {
-        limit: 50,
-        sort: 'desc', // newest first
-        createdSince: lastChecked
-      }
-    });
-    return res.data.contacts || [];
-  } catch (err) {
-    console.error('❌ Error fetching contacts:', err.response?.data || err.message);
-    return [];
-  }
+  const res = await axios.get('https://api.brevo.com/v3/contacts', {
+    headers,
+    params: {
+      limit: 50,
+      sort: 'desc'
+    }
+  });
+  return res.data.contacts || [];
 }
 
-async function updateContactBrEVOId(contact) {
+async function updateBrevoId(contact) {
   const { id, email, attributes } = contact;
 
   // Skip if BREVO_ID already set
-  if (attributes?.BREVO_ID) {
-    return;
-  }
+  if (attributes?.BREVO_ID) return;
 
-  try {
-    await axios.put(
-      `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-      {
-        attributes: {
-          BREVO_ID: String(id)
-        }
-      },
-      { headers }
-    );
-    console.log(`✅ Updated BREVO_ID for ${email} → ${id}`);
-  } catch (err) {
-    console.error(`❌ Failed to update ${email}:`, err.response?.data || err.message);
-  }
+  await axios.put(
+    `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+    { attributes: { BREVO_ID: String(id) } },
+    { headers }
+  );
+
+  console.log(`✅ Updated BREVO_ID for ${email} → ${id}`);
 }
 
 async function poll() {
-  console.log(`🔍 Checking for new contacts since ${lastChecked}...`);
+  try {
+    console.log(`🔍 Checking contacts at ${new Date().toISOString()}...`);
 
-  const contacts = await getRecentContacts();
+    const contacts = await getRecentContacts();
 
-  if (contacts.length === 0) {
-    console.log('   No new contacts found.');
-  } else {
-    console.log(`   Found ${contacts.length} contact(s). Processing...`);
-    for (const contact of contacts) {
-      await updateContactBrEVOId(contact);
+    if (contacts.length === 0) {
+      console.log('   No contacts found.');
+      return;
     }
-  }
 
-  // Update last checked time
-  lastChecked = new Date().toISOString();
+    // Filter only contacts created since last check
+    const newContacts = contacts.filter(c => {
+      return new Date(c.createdAt) >= new Date(lastChecked);
+    });
+
+    console.log(`   ${newContacts.length} new contact(s) since last check.`);
+
+    for (const contact of newContacts) {
+      try {
+        await updateBrevoId(contact);
+      } catch (err) {
+        console.error(`❌ Failed for ${contact.email}:`, err.response?.data || err.message);
+      }
+    }
+
+  } catch (err) {
+    console.error('❌ Poll error:', err.response?.data || err.message);
+  } finally {
+    lastChecked = new Date().toISOString();
+  }
 }
 
 async function main() {
   console.log('🚀 Brevo ID Sync started — polling every 2 minutes...');
-
-  // Run immediately on start
   await poll();
-
-  // Then run every 2 minutes
   setInterval(poll, POLL_INTERVAL_MS);
 }
 
