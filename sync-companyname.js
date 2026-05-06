@@ -61,6 +61,11 @@ async function buildHubSpotCompanyMap() {
   }
 
   console.log(`✅ HubSpot map built — ${Object.keys(emailToCompany).length} contacts with company`);
+  
+  // Debug: show first 5 emails from HubSpot map
+  const sample = Object.keys(emailToCompany).slice(0, 5);
+  console.log('   Sample HubSpot emails:', sample);
+  
   return emailToCompany;
 }
 
@@ -93,6 +98,11 @@ async function getAllBrevoContacts() {
   }
 
   console.log(`✅ Brevo total contacts: ${allContacts.length}`);
+  
+  // Debug: show first 5 emails from Brevo
+  const sample = allContacts.slice(0, 5).map(c => c.email);
+  console.log('   Sample Brevo emails:', sample);
+  
   return allContacts;
 }
 
