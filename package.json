@@ -1,0 +1,13 @@
+{
+  "name": "brevo-id-sync",
+  "version": "1.0.0",
+  "description": "Polls Brevo every 2 minutes and copies contact ID into BREVO_ID attribute",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.0"
+  }
+}
