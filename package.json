@@ -1,12 +1,13 @@
 {
   "name": "brevo-id-sync",
   "version": "1.0.0",
-  "description": "Polls Brevo every 2 minutes and copies contact ID into BREVO_ID attribute",
+  "description": "Brevo contact sync + email sequence runner",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node index.js & node sequence.js",
     "backfill": "node backfill.js",
-    "sync-company": "node sync-companyname.js"
+    "sync-company": "node sync-companyname.js",
+    "sequence": "node sequence.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
