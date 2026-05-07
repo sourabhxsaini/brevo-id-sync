@@ -192,33 +192,42 @@ async function processSequenceQueue() {
   const dueContacts = [];
 
   try {
-    // Search only contacts that have SEQ_LIST_ID set to this list
-    const res = await axios.post(
-      'https://api.brevo.com/v3/contacts/search',
-      {
-        query: String(listId),
-        limit: 100,
-        offset: 0
-      },
-      { headers: BREVO_HEADERS }
-    );
+    // Fetch contacts from the sequence list and check who is due
+    let offset = 0;
+    const limit = 100;
 
-    const contacts = res.data.contacts || [];
+    while (true) {
+      const res = await axios.get(
+        `https://api.brevo.com/v3/contacts/lists/${listId}/contacts`,
+        { headers: BREVO_HEADERS, params: { limit, offset, sort: 'desc' } }
+      );
 
-    for (const full of contacts) {
-      const attrs = full.attributes || {};
-      const stage     = parseInt(attrs.SEQ_STAGE);
-      const nextSend  = attrs.SEQ_NEXT_SEND;
-      const seqListId = attrs.SEQ_LIST_ID;
+      const contacts = res.data.contacts || [];
+      if (contacts.length === 0) break;
 
-      if (!stage || stage === 'DONE' || seqListId !== String(listId)) continue;
-      if (nextSend && new Date(nextSend) <= now) {
-        dueContacts.push({ ...full, currentStage: stage });
+      for (const c of contacts) {
+        if (!c.email) continue;
+        try {
+          const full = await getContact(c.email);
+          const attrs = full.attributes || {};
+          const stage     = parseInt(attrs.SEQ_STAGE);
+          const nextSend  = attrs.SEQ_NEXT_SEND;
+          const seqListId = attrs.SEQ_LIST_ID;
+
+          if (!stage || attrs.SEQ_STAGE === 'DONE' || seqListId !== String(listId)) continue;
+          if (nextSend && new Date(nextSend) <= now) {
+            dueContacts.push({ ...full, email: c.email, currentStage: stage });
+          }
+          await new Promise(r => setTimeout(r, 80));
+        } catch (err) { /* skip */ }
       }
+
+      offset += limit;
+      if (contacts.length < limit) break;
+      await new Promise(r => setTimeout(r, 100));
     }
   } catch (err) {
-    // Fallback: skip queue processing this round
-    console.log('   ⚠️  Queue search skipped:', err.message);
+    console.log('   ⚠️  Queue check skipped:', err.message);
   }
 
   console.log(`   Sequence queue: ${dueContacts.length} contact(s) due for next email`);
