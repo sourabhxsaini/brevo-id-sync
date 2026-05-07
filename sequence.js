@@ -19,8 +19,8 @@ const BREVO_HEADERS = {
 // Sequence config — List 51 → 5 emails
 // ─────────────────────────────────────────
 const SEQUENCE_CONFIG = {
-  listId: 51,
-  name: 'Platform Signup',
+  listId: 49,
+  name: 'Signup Sequence',
   steps: [
     { stage: 1, templateId: 95, delayDays: 0  }, // Day 1  — send immediately
     { stage: 2, templateId: 94, delayDays: 3  }, // Day 4  — 3 days after stage 1
