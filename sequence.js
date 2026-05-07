@@ -117,12 +117,17 @@ async function startNewSequences() {
     const contacts = res.data.contacts || [];
     if (contacts.length === 0) break;
 
-    const recent = contacts.filter(c =>
-      new Date(c.modifiedAt || c.createdAt) >= new Date(since)
-    );
-    newContacts.push(...recent);
+    // New = added recently OR not yet in sequence
+    for (const c of contacts) {
+      const isRecent = new Date(c.modifiedAt || c.createdAt) >= new Date(since);
+      if (isRecent) newContacts.push(c);
+    }
 
-    if (recent.length < contacts.length) break;
+    // Stop paginating if all contacts on this page are older than since
+    const allOld = contacts.every(c =>
+      new Date(c.modifiedAt || c.createdAt) < new Date(since)
+    );
+    if (allOld) break;
     offset += limit;
     if (contacts.length < limit) break;
     await new Promise(r => setTimeout(r, 100));
@@ -179,53 +184,41 @@ async function startNewSequences() {
 
 // ─────────────────────────────────────────
 // SYNC 2: Check existing contacts due for next email
+// Uses Brevo search to find only contacts in sequence
 // ─────────────────────────────────────────
 async function processSequenceQueue() {
   const { listId, steps } = SEQUENCE_CONFIG;
   const now = new Date();
-
-  // Fetch contacts in sequence that are due
-  let offset = 0;
-  const limit = 100;
   const dueContacts = [];
 
-  while (true) {
-    const res = await axios.get(
-      `https://api.brevo.com/v3/contacts/lists/${listId}/contacts`,
-      { headers: BREVO_HEADERS, params: { limit, offset, sort: 'desc' } }
+  try {
+    // Search only contacts that have SEQ_LIST_ID set to this list
+    const res = await axios.post(
+      'https://api.brevo.com/v3/contacts/search',
+      {
+        query: String(listId),
+        limit: 100,
+        offset: 0
+      },
+      { headers: BREVO_HEADERS }
     );
 
     const contacts = res.data.contacts || [];
-    if (contacts.length === 0) break;
 
-    for (const c of contacts) {
-      if (!c.email) continue;
+    for (const full of contacts) {
+      const attrs = full.attributes || {};
+      const stage     = parseInt(attrs.SEQ_STAGE);
+      const nextSend  = attrs.SEQ_NEXT_SEND;
+      const seqListId = attrs.SEQ_LIST_ID;
 
-      try {
-        const full = await getContact(c.email);
-        const attrs = full.attributes || {};
-
-        const stage       = parseInt(attrs.SEQ_STAGE);
-        const nextSend    = attrs.SEQ_NEXT_SEND;
-        const seqListId   = attrs.SEQ_LIST_ID;
-
-        // Only process contacts in this sequence
-        if (!stage || seqListId !== String(listId)) continue;
-
-        // Check if it's time to send next email
-        if (nextSend && new Date(nextSend) <= now) {
-          dueContacts.push({ ...full, email: c.email, currentStage: stage });
-        }
-
-        await new Promise(r => setTimeout(r, 50));
-      } catch (err) {
-        // skip
+      if (!stage || stage === 'DONE' || seqListId !== String(listId)) continue;
+      if (nextSend && new Date(nextSend) <= now) {
+        dueContacts.push({ ...full, currentStage: stage });
       }
     }
-
-    offset += limit;
-    if (contacts.length < limit) break;
-    await new Promise(r => setTimeout(r, 100));
+  } catch (err) {
+    // Fallback: skip queue processing this round
+    console.log('   ⚠️  Queue search skipped:', err.message);
   }
 
   console.log(`   Sequence queue: ${dueContacts.length} contact(s) due for next email`);
