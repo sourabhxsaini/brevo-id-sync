@@ -1,5 +1,8 @@
 require('dotenv').config();
-const axios = require('axios');
+const path = require('path');
+const { createHttpClient, formatHttpError } = require('./lib/http-client');
+const { loadState, saveState } = require('./lib/runtime-state');
+const { mapWithConcurrency } = require('./lib/async-pool');
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const NOTIFY_EMAIL  = process.env.NOTIFY_EMAIL;
@@ -18,6 +21,11 @@ if (!BREVO_API_KEY) {
   process.exit(1);
 }
 
+if (!NOTIFY_EMAIL || !SENDER_EMAIL) {
+  console.error('❌ NOTIFY_EMAIL or SENDER_EMAIL is missing!');
+  process.exit(1);
+}
+
 console.log('✅ BREVO_API_KEY found, starting...');
 
 const BREVO_HEADERS = {
@@ -25,29 +33,62 @@ const BREVO_HEADERS = {
   'Content-Type': 'application/json'
 };
 
+const http = createHttpClient(BREVO_HEADERS);
+
 const POLL_INTERVAL_MS = 2 * 60 * 1000;
+const WORKER_CONCURRENCY = Number(process.env.SYNC_WORKER_CONCURRENCY || 4);
+const STATE_PATH = path.join(__dirname, '.runtime', 'index-state.json');
+const DEFAULT_SINCE = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
+
+const state = loadState(STATE_PATH, {
+  lastCheckedAllContacts: DEFAULT_SINCE,
+  lastCheckedMap: {}
+});
 
 // Track last checked time per list to avoid mixing polls
 const lastCheckedMap = {};
 LIST_RULES.forEach(r => {
-  lastCheckedMap[r.listId] = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
+  lastCheckedMap[r.listId] = state.lastCheckedMap[r.listId] || DEFAULT_SINCE;
 });
-let lastCheckedAllContacts = new Date(Date.now() - POLL_INTERVAL_MS).toISOString();
+let lastCheckedAllContacts = state.lastCheckedAllContacts || DEFAULT_SINCE;
+let isPolling = false;
+
+function toDateOnly(isoValue) {
+  return String(isoValue || '').split('T')[0];
+}
+
+async function markNotifiedWithFallback(email, attrName, isoValue) {
+  try {
+    await http.put(
+      `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+      { attributes: { [attrName]: isoValue } }
+    );
+    return;
+  } catch (err) {
+    if (err?.response?.status !== 400) {
+      throw err;
+    }
+  }
+
+  const dateOnly = toDateOnly(isoValue);
+  await http.put(
+    `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+    { attributes: { [attrName]: dateOnly } }
+  );
+  console.log(`   ℹ️  ${email} ${attrName} saved as date-only (${dateOnly})`);
+}
 
 // ─────────────────────────────────────────
 // SYNC 1: All new contacts → BREVO_ID + SMS
 // ─────────────────────────────────────────
-async function syncAllNewContacts() {
-  const since = lastCheckedAllContacts;
-  lastCheckedAllContacts = new Date().toISOString(); // update immediately
+async function syncAllNewContacts(since) {
 
   let allContacts = [];
   let offset = 0;
   const limit = 100;
 
   while (true) {
-    const res = await axios.get('https://api.brevo.com/v3/contacts', {
-      headers: BREVO_HEADERS,
+    const res = await http.get('https://api.brevo.com/v3/contacts', {
       params: { limit, offset, sort: 'desc' }
     });
 
@@ -65,9 +106,10 @@ async function syncAllNewContacts() {
 
   console.log(`   BREVO_ID+SMS: ${allContacts.length} new contact(s)`);
 
-  for (const contact of allContacts) {
+  let failedCount = 0;
+  const workerResults = await mapWithConcurrency(allContacts, WORKER_CONCURRENCY, async (contact) => {
     const { id, email, attributes } = contact;
-    if (!email) continue;
+    if (!email) return;
 
     const updates = {};
     if (!attributes?.BREVO_ID) updates.BREVO_ID = String(id);
@@ -79,44 +121,46 @@ async function syncAllNewContacts() {
       if (attributes?.PHONENUMBER !== sms)        updates.PHONENUMBER = sms;
     }
 
-    if (Object.keys(updates).length === 0) continue;
+    if (Object.keys(updates).length === 0) return;
 
     try {
-      await axios.put(
+      await http.put(
         `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-        { attributes: updates },
-        { headers: BREVO_HEADERS }
+        { attributes: updates }
       );
       console.log(`   ✅ ${email} → ${JSON.stringify(updates)}`);
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 80));
+      return { ok: true };
     } catch (err) {
-      console.error(`   ❌ ${email}:`, err.response?.data || err.message);
+      failedCount += 1;
+      console.error(`   ❌ ${formatHttpError(`syncAllNewContacts:${email}`, err)}`);
+      return { ok: false, email };
     }
-  }
+  });
+
+  const thrownFailures = workerResults.filter(r => r && r.error).length;
+  return failedCount + thrownFailures;
 }
 
 // ─────────────────────────────────────────
 // SYNC 2: List-specific → Send email template
 // ─────────────────────────────────────────
-async function syncListEmails() {
-  if (!NOTIFY_EMAIL || !SENDER_EMAIL) {
-    console.log('   ⚠️  NOTIFY_EMAIL or SENDER_EMAIL not set — skipping');
-    return;
-  }
+async function syncListEmails(sinceMap, pollStartedAt) {
+  const successfulLists = [];
 
   for (const rule of LIST_RULES) {
     const { listId, templateId, name } = rule;
-    const since = lastCheckedMap[listId];
-    lastCheckedMap[listId] = new Date().toISOString(); // update per list
+    const notifiedAttr = `NOTIFIED_LIST_${listId}`;
+    const since = sinceMap[listId] || DEFAULT_SINCE;
 
     let newContacts = [];
     let offset = 0;
     const limit = 100;
 
     while (true) {
-      const res = await axios.get(
+      const res = await http.get(
         `https://api.brevo.com/v3/contacts/lists/${listId}/contacts`,
-        { headers: BREVO_HEADERS, params: { limit, offset, sort: 'desc' } }
+        { params: { limit, offset, sort: 'desc' } }
       );
 
       const contacts = res.data.contacts || [];
@@ -135,59 +179,118 @@ async function syncListEmails() {
 
     console.log(`   List "${name}" (${listId}): ${newContacts.length} new contact(s) → Template ${templateId}`);
 
-    for (const contact of newContacts) {
-      const { email } = contact;
-      if (!email) continue;
+    try {
+      let listFailures = 0;
+      const workerResults = await mapWithConcurrency(newContacts, WORKER_CONCURRENCY, async (contact) => {
+        const { email } = contact;
+        if (!email) return { ok: true, skipped: true };
 
-      try {
-        // Fetch FULL contact details to get all attributes
-        const fullRes = await axios.get(
-          `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-          { headers: BREVO_HEADERS }
-        );
-        const full   = fullRes.data;
-        const attrs  = full.attributes || {};
-        const fullId = full.id;
+        try {
+          // Fetch FULL contact details to get all attributes
+          const fullRes = await http.get(
+            `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`
+          );
+          const full   = fullRes.data;
+          const attrs  = full.attributes || {};
+          const fullId = full.id;
 
-        await axios.post(
-          'https://api.brevo.com/v3/smtp/email',
-          {
-            sender: { name: 'UXArmy', email: SENDER_EMAIL },
-            to: [{ name: 'Kuldeep', email: NOTIFY_EMAIL }],
-            templateId,
-            params: {
-              FIRSTNAME:   attrs.FIRSTNAME        || '',
-              LASTNAME:    attrs.LASTNAME         || '',
-              EMAIL:       email                  || '',
-              PHONE:       attrs.SMS              || attrs.MOBILEPHONENUMBER || '',
-              MESSAGE:     attrs.ADDITIONAL_NOTES || '',
-              CONTACT_URL: `https://app.brevo.com/contact/index/${fullId}`
-            }
-          },
-          { headers: BREVO_HEADERS }
-        );
+          // Deduplicate per list: once notified for this list, skip forever.
+          if (attrs[notifiedAttr]) {
+            console.log(`   ⏭️  Skip ${email} — already notified for list ${listId}`);
+            return { ok: true, skipped: true };
+          }
 
-        console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME}`);
-        await new Promise(r => setTimeout(r, 200));
+          await http.post(
+            'https://api.brevo.com/v3/smtp/email',
+            {
+              sender: { name: 'UXArmy', email: SENDER_EMAIL },
+              to: [{ name: 'Kuldeep', email: NOTIFY_EMAIL }],
+              templateId,
+              params: {
+                FIRSTNAME:   attrs.FIRSTNAME        || '',
+                LASTNAME:    attrs.LASTNAME         || '',
+                EMAIL:       email                  || '',
+                PHONE:       attrs.SMS              || attrs.MOBILEPHONENUMBER || '',
+                MESSAGE:     attrs.ADDITIONAL_NOTES || '',
+                CONTACT_URL: `https://app.brevo.com/contact/index/${fullId}`
+              }
+            },
+            { __retryable: false }
+          );
 
-      } catch (err) {
-        console.error(`   ❌ Email failed for ${email}:`, err.response?.data || err.message);
+          await markNotifiedWithFallback(email, notifiedAttr, pollStartedAt);
+
+          console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME}`);
+          await new Promise(r => setTimeout(r, 150));
+          return { ok: true };
+
+        } catch (err) {
+          listFailures += 1;
+          console.error(`   ❌ ${formatHttpError(`syncListEmails:list${listId}:${email}`, err)}`);
+          return { ok: false, email };
+        }
+      });
+
+      const thrownFailures = workerResults.filter(r => r && r.error).length;
+      const totalFailures = listFailures + thrownFailures;
+
+      if (totalFailures === 0) {
+        successfulLists.push(listId);
+      } else {
+        console.log(`   ⚠️  List ${listId} checkpoint not advanced (${totalFailures} failed contact(s))`);
       }
+    } catch (err) {
+      console.error(`   ❌ ${formatHttpError(`syncListEmails:list${listId}`, err)}`);
     }
   }
+
+  return successfulLists;
 }
 
 // ─────────────────────────────────────────
 // Main poll
 // ─────────────────────────────────────────
 async function poll() {
+  if (isPolling) {
+    console.log('   ⏳ Previous poll still running, skipping this cycle.');
+    return;
+  }
+
+  isPolling = true;
   try {
     console.log(`\n⚡ [${new Date().toISOString()}] Polling...`);
-    await syncAllNewContacts();
-    await syncListEmails();
+    const pollStartedAt = new Date().toISOString();
+    const sinceAll = lastCheckedAllContacts;
+    const sinceMapSnapshot = { ...lastCheckedMap };
+
+    const allContactsFailures = await syncAllNewContacts(sinceAll);
+    if (allContactsFailures === 0) {
+      lastCheckedAllContacts = pollStartedAt;
+    } else {
+      console.log(`   ⚠️  All-contacts checkpoint not advanced (${allContactsFailures} failed update(s))`);
+    }
+
+    const successfulLists = await syncListEmails(sinceMapSnapshot, pollStartedAt);
+    for (const listId of successfulLists) {
+      lastCheckedMap[listId] = pollStartedAt;
+    }
+
+    saveState(STATE_PATH, {
+      lastCheckedAllContacts,
+      lastCheckedMap,
+    });
   } catch (err) {
-    console.error('❌ Poll error:', err.response?.data || err.message);
+    console.error(`❌ ${formatHttpError('poll', err)}`);
+  } finally {
+    isPolling = false;
   }
+}
+
+function scheduleNextPoll() {
+  setTimeout(async () => {
+    await poll();
+    scheduleNextPoll();
+  }, POLL_INTERVAL_MS);
 }
 
 async function main() {
@@ -198,7 +301,7 @@ async function main() {
   console.log();
 
   await poll();
-  setInterval(poll, POLL_INTERVAL_MS);
+  scheduleNextPoll();
 }
 
 main();

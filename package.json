@@ -4,13 +4,13 @@
   "description": "Brevo contact sync + email sequence runner",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js & node sequence.js",
+    "start": "concurrently --kill-others-on-fail \"node index.js\" \"node sequence.js\"",
     "backfill": "node backfill.js",
-    "sync-company": "node sync-companyname.js",
     "sequence": "node sequence.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "concurrently": "^9.0.1",
     "dotenv": "^16.0.0"
   }
 }
