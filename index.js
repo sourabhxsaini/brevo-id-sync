@@ -13,7 +13,8 @@ const LIST_RULES = [
   { listId: 42, templateId: 87, name: 'Enterprise Leads' },
   { listId: 46, templateId: 89, name: 'Korean Leads' },
   { listId: 40, templateId: 88, name: 'Japanese Leads' },
-  { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' }
+  { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
+  { listId: 55, templateId: 96, name: 'Participants Recruitment Leads' },  // ← add this
 ];
 
 if (!BREVO_API_KEY) {
