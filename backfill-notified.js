@@ -19,8 +19,8 @@ const LIST_RULES = [
   { listId: 46, name: 'Korean Leads' },
   { listId: 40, name: 'Japanese Leads' },
   { listId: 38, name: 'WhatsApp Reachout Leads' },
-  { listId: 55, name: 'New Signup' },              // ← add
-  { listId: 51, name: 'Platform Signup Leads' },   // ← add
+  { listId: 55, name: 'Participants Recruitment Leads' },
+  { listId: 51, name: 'Platform Signup Leads' },
 ];
 
 function toDateOnly(isoValue) {
