@@ -18,6 +18,33 @@ const LIST_RULES = [
   { listId: 51, templateId: 97, name: 'Platform Signup Leads' },
 ];
 
+// ─────────────────────────────────────────
+// Category field maps (index → label)
+// Brevo stores category fields as numeric indexes internally
+// ─────────────────────────────────────────
+const UXA_SOURCE_MAP = {
+  1: 'Platform Signup',
+  2: 'Demo Form',
+};
+
+const PLAN_NAME_MAP = {
+  1: 'Free',
+  2: 'Starter',
+  3: 'Pro',
+  4: 'Enterprise',
+};
+
+const PAYMENT_RECURRING_TYPE_MAP = {
+  1: 'Free',
+  2: 'Monthly',
+  3: 'Annual',
+};
+
+function resolveCategory(map, value) {
+  if (!value && value !== 0) return '';
+  return map[value] || String(value);
+}
+
 if (!BREVO_API_KEY) {
   console.error('❌ BREVO_API_KEY is missing!');
   process.exit(1);
@@ -209,12 +236,16 @@ async function syncListEmails(sinceMap, pollStartedAt) {
               to: [{ name: 'Kuldeep', email: NOTIFY_EMAIL }],
               templateId,
               params: {
-                FIRSTNAME:   attrs.FIRSTNAME        || '',
-                LASTNAME:    attrs.LASTNAME         || '',
-                EMAIL:       email                  || '',
-                PHONE:       attrs.SMS              || attrs.MOBILEPHONENUMBER || '',
-                MESSAGE:     attrs.ADDITIONAL_NOTES || '',
-                CONTACT_URL: `https://app.brevo.com/contact/index/${fullId}`
+                FIRSTNAME:              attrs.FIRSTNAME || '',
+                LASTNAME:               attrs.LASTNAME  || '',
+                EMAIL:                  email           || '',
+                PHONE:                  attrs.SMS || attrs.MOBILEPHONENUMBER || '',
+                MESSAGE:                attrs.ADDITIONAL_NOTES || '',
+                CONTACT_URL:            `https://app.brevo.com/contact/index/${fullId}`,
+                // Resolved from category indexes → human-readable labels
+                UXA_SOURCE:             resolveCategory(UXA_SOURCE_MAP,             attrs.UXA_SOURCE),
+                PLAN_NAME:              resolveCategory(PLAN_NAME_MAP,              attrs.PLAN_NAME),
+                PAYMENT_RECURRING_TYPE: resolveCategory(PAYMENT_RECURRING_TYPE_MAP, attrs.PAYMENT_RECURRING_TYPE),
               }
             },
             { __retryable: false }
