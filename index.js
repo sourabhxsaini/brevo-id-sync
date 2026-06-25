@@ -15,7 +15,7 @@ const LIST_RULES = [
   { listId: 40, templateId: 88, name: 'Japanese Leads' },
   { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
   { listId: 55, templateId: 96, name: 'Participants Recruitment Leads' },
-  { listId: 51, templateId: 97, name: 'Platform Signup Leads' },
+  // { listId: 51, templateId: 97, name: 'Platform Signup Leads' },
 ];
 
 // ─────────────────────────────────────────
