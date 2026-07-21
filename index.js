@@ -65,6 +65,15 @@ function parseCsvList(value) {
     .filter(Boolean);
 }
 
+function makeNameFromEmail(email) {
+  let local = String(email || '').split('@')[0] || '';
+  // Strip plus tags (user+tag@domain) and use the part before '+'
+  local = local.split('+')[0];
+  const parts = local.split(/[._\-]+/).filter(Boolean);
+  const name = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+  return name || local || email;
+}
+
 const notifyEmails = parseCsvList(NOTIFY_EMAIL || '');
 
 if (!BREVO_API_KEY) {
@@ -251,7 +260,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
             return { ok: true, skipped: true };
           }
 
-          const recipients = notifyEmails.map((email) => ({ name: '', email }));
+          const recipients = notifyEmails.map((address) => ({ name: makeNameFromEmail(address), email: address }));
 
           const sender = { name: 'UXArmy', email: SENDER_EMAIL };
 
