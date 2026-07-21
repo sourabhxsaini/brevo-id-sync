@@ -5,17 +5,29 @@ const { loadState, saveState } = require('./lib/runtime-state');
 const { mapWithConcurrency } = require('./lib/async-pool');
 
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
-const NOTIFY_EMAIL  = process.env.NOTIFY_EMAIL;
-const SENDER_EMAIL  = process.env.SENDER_EMAIL;
+const NOTIFY_EMAIL   = process.env.NOTIFY_EMAIL;
+const SENDER_EMAIL   = process.env.SENDER_EMAIL;
 
 const LIST_RULES = [
+  { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
+  { listId: 40, templateId: 88, name: 'Japanese Leads' },
   { listId: 41, templateId: 86, name: 'Global Leads' },
   { listId: 42, templateId: 87, name: 'Enterprise Leads' },
   { listId: 46, templateId: 89, name: 'Korean Leads' },
-  { listId: 40, templateId: 88, name: 'Japanese Leads' },
-  { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
+  { listId: 51, templateId: 97, name: 'Platform Signup Leads' },
   { listId: 55, templateId: 96, name: 'Participants Recruitment Leads' },
-  // { listId: 51, templateId: 97, name: 'Platform Signup Leads' },
+  { listId: 56, templateId: 105, name: 'Solution Outsources Research Service' },
+  { listId: 57, templateId: 106, name: 'Solution Research Infrastructure' },
+  { listId: 58, templateId: 107, name: 'Solution Managed ResearchOps' },
+  { listId: 59, templateId: 108, name: 'Solution Market Research' },
+  { listId: 69, templateId: 115, name: 'Solution Product Managers' },
+  { listId: 72, templateId: 116, name: 'Solution Product Designers' },
+  { listId: 73, templateId: 114, name: 'Solution User Researchers' },
+  { listId: 74, templateId: 113, name: 'Solution Marketing Managers' },
+  { listId: 75, templateId: 112, name: 'Solution Enterprise' },
+  { listId: 76, templateId: 111, name: 'Solution Startups' },
+  { listId: 77, templateId: 110, name: 'Solution Small Business' },
+  { listId: 78, templateId: 109, name: 'Solution Mid-Market' },
 ];
 
 // ─────────────────────────────────────────
@@ -45,13 +57,23 @@ function resolveCategory(map, value) {
   return map[value] || String(value);
 }
 
+function parseCsvList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+const notifyEmails = parseCsvList(NOTIFY_EMAIL || '');
+
 if (!BREVO_API_KEY) {
   console.error('❌ BREVO_API_KEY is missing!');
   process.exit(1);
 }
 
-if (!NOTIFY_EMAIL || !SENDER_EMAIL) {
-  console.error('❌ NOTIFY_EMAIL or SENDER_EMAIL is missing!');
+if (notifyEmails.length === 0 || !SENDER_EMAIL) {
+  console.error('❌ NOTIFY_EMAIL(S) or SENDER_EMAIL is missing!');
   process.exit(1);
 }
 
@@ -229,11 +251,15 @@ async function syncListEmails(sinceMap, pollStartedAt) {
             return { ok: true, skipped: true };
           }
 
+          const recipients = notifyEmails.map((email) => ({ name: '', email }));
+
+          const sender = { name: 'UXArmy', email: SENDER_EMAIL };
+
           await http.post(
             'https://api.brevo.com/v3/smtp/email',
             {
-              sender: { name: 'UXArmy', email: SENDER_EMAIL },
-              to: [{ name: 'Kuldeep', email: NOTIFY_EMAIL }],
+              sender,
+              to: recipients,
               templateId,
               params: {
                 FIRSTNAME:              attrs.FIRSTNAME || '',
@@ -253,7 +279,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
 
           await markNotifiedWithFallback(email, notifiedAttr, pollStartedAt);
 
-          console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME}`);
+          console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME} (sender: ${SENDER_EMAIL})`);
           await new Promise(r => setTimeout(r, 150));
           return { ok: true };
 
