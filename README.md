@@ -8,13 +8,20 @@ Polls Brevo every 2 minutes for new contacts and copies their contact ID into th
    - Go to **Contacts → Settings → Contact Attributes**
    - Add new attribute: Name `BREVO_ID`, Type `Text`
 
-2. Add env var:
+2. Add env vars:
 BREVO_API_KEY=your_key_here
+NOTIFY_EMAILS=first@example.com,second@example.com
+SENDER_EMAILS=sender1@example.com,sender2@example.com
+
+Optional vars:
+NOTIFY_NAMES=First Recipient,Second Recipient
+SENDER_NAMES=Sender One,Sender Two
+SENDER_DEFAULT_NAME=UXArmy
 
 3. Deploy to Railway:
 - Push to GitHub
 - Connect repo on railway.app
-- Add BREVO_API_KEY env var
+- Add env vars above
 - Deploy
 
 ## Email template usage
