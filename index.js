@@ -52,6 +52,32 @@ const PAYMENT_RECURRING_TYPE_MAP = {
   3: 'Annual',
 };
 
+// Radio field on company/team pages (Mid-Market, Small Business,
+// Marketing, User Researcher, Product Manager, Product Designer)
+const TEAMSIZE_MAP = {
+  1: 'Just Me',
+  2: '2–10',
+  3: '11–50',
+  4: '50+',
+};
+
+// Radio field on company/team pages
+const BESTDESCRIBE_MAP = {
+  1: 'Is this worth building?',
+  2: 'Will people be able to use this?',
+  3: 'What should be top of the roadmap?',
+  4: 'Did it actually work?',
+  5: "I'm not sure yet, help me figure it out",
+};
+
+// Dropdown on Managed ResearchOps page
+const STUDIES_TEAM_RUN_MAP = {
+  1: '1–2',
+  2: '3–5',
+  3: '6–10',
+  4: '10+',
+};
+
 function resolveCategory(map, value) {
   if (!value && value !== 0) return '';
   return map[value] || String(value);
@@ -271,16 +297,36 @@ async function syncListEmails(sinceMap, pollStartedAt) {
               to: recipients,
               templateId,
               params: {
+                // ── Core identity fields (all templates) ──
                 FIRSTNAME:              attrs.FIRSTNAME || '',
                 LASTNAME:               attrs.LASTNAME  || '',
                 EMAIL:                  email           || '',
                 PHONE:                  attrs.SMS || attrs.MOBILEPHONENUMBER || '',
                 MESSAGE:                attrs.ADDITIONAL_NOTES || '',
                 CONTACT_URL:            `https://app.brevo.com/contact/index/${fullId}`,
-                // Resolved from category indexes → human-readable labels
+
+                // ── Platform signup fields (category indexes → labels) ──
                 UXA_SOURCE:             resolveCategory(UXA_SOURCE_MAP,             attrs.UXA_SOURCE),
                 PLAN_NAME:              resolveCategory(PLAN_NAME_MAP,              attrs.PLAN_NAME),
                 PAYMENT_RECURRING_TYPE: resolveCategory(PAYMENT_RECURRING_TYPE_MAP, attrs.PAYMENT_RECURRING_TYPE),
+
+                // ── Solution / team / company page form fields (free text) ──
+                COMPANYNAME:                  attrs.COMPANYNAME || '',
+                COUNTRY:                      attrs.COUNTRY || '',
+                BUSINESS_PROBLEM:             attrs.BUSINESS_PROBLEM || '',
+                RESEARCH_MARKET:              attrs.RESEARCH_MARKET || '',
+                CURRENT_RESEARCH:             attrs.CURRENT_RESEARCH || '',
+                PREFERRED_STUDY_TIMELINE:     attrs.PREFERRED_STUDY_TIMELINE || '',
+                RESEARCH_FUNCTION_TODAY:      attrs.RESEARCH_FUNCTION_TODAY || '',
+                RESEARCH_TEAM_MEMBER_IN_TEAM: attrs.RESEARCH_TEAM_MEMBER_IN_TEAM || '',
+                PRODUCTDECISION:              attrs.PRODUCTDECISION || '',
+                MARKETNG_QUESTION_DECISION:   attrs.MARKETNG_QUESTION_DECISION || '',
+                ANYTHING_ELSE_WE_SHOULD_KNOW: attrs.ANYTHING_ELSE_WE_SHOULD_KNOW || '',
+
+                // ── Solution / team / company page fields (category indexes → labels) ──
+                TEAMSIZE:                     resolveCategory(TEAMSIZE_MAP,         attrs.TEAMSIZE),
+                BESTDESCRIBE:                 resolveCategory(BESTDESCRIBE_MAP,     attrs.BESTDESCRIBE),
+                STUDIES_TEAM_RUN:             resolveCategory(STUDIES_TEAM_RUN_MAP, attrs.STUDIES_TEAM_RUN),
               }
             },
             { __retryable: false }
