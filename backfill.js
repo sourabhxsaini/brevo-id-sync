@@ -8,84 +8,131 @@ if (!BREVO_API_KEY) {
   process.exit(1);
 }
 
-const headers = {
+const BREVO_HEADERS = {
   'api-key': BREVO_API_KEY,
   'Content-Type': 'application/json'
 };
 
-async function getAllContacts() {
-  let allContacts = [];
+const LIST_RULES = [
+  { listId: 41, name: 'Global Leads' },
+  { listId: 42, name: 'Enterprise Leads' },
+  { listId: 46, name: 'Korean Leads' },
+  { listId: 40, name: 'Japanese Leads' },
+  { listId: 38, name: 'WhatsApp Reachout Leads' },
+  { listId: 55, name: 'Participants Recruitment Leads' },
+  { listId: 51, name: 'Platform Signup Leads' },
+  { listId: 56, name: 'Solution Outsources Research Service' },
+  { listId: 57, name: 'Solution Research Infrastructure' },
+  { listId: 58, name: 'Solution Managed ResearchOps' },
+  { listId: 59, name: 'Solution Market Research' },
+  { listId: 69, name: 'Solution Product Managers' },
+  { listId: 72, name: 'Solution Product Designers' },
+  { listId: 73, name: 'Solution User Researchers' },
+  { listId: 74, name: 'Solution Marketing Managers' },
+  { listId: 75, name: 'Solution Enterprise' },
+  { listId: 76, name: 'Solution Startups' },
+  { listId: 77, name: 'Solution Small Business' },
+  { listId: 78, name: 'Solution Mid-Market' },
+];
+
+function toDateOnly(isoValue) {
+  return String(isoValue || '').split('T')[0];
+}
+
+async function getContact(email) {
+  const res = await axios.get(
+    `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+    { headers: BREVO_HEADERS }
+  );
+  return res.data;
+}
+
+async function markNotified(email, attrName, value) {
+  try {
+    await axios.put(
+      `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+      { attributes: { [attrName]: value } },
+      { headers: BREVO_HEADERS }
+    );
+    return;
+  } catch (err) {
+    if (err?.response?.status !== 400) {
+      throw err;
+    }
+  }
+
+  const dateOnly = toDateOnly(value);
+  await axios.put(
+    `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
+    { attributes: { [attrName]: dateOnly } },
+    { headers: BREVO_HEADERS }
+  );
+}
+
+async function backfillList(rule) {
+  const { listId, name } = rule;
+  const attrName = `NOTIFIED_LIST_${listId}`;
+  const markTime = new Date().toISOString();
+
   let offset = 0;
   const limit = 100;
+  let total = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  console.log(`\n📌 Backfilling ${name} (List ${listId}) using ${attrName}`);
 
   while (true) {
-    console.log(`📥 Fetching contacts ${offset} to ${offset + limit}...`);
-
-    const res = await axios.get('https://api.brevo.com/v3/contacts', {
-      headers,
-      params: { limit, offset, sort: 'desc' }
-    });
+    const res = await axios.get(
+      `https://api.brevo.com/v3/contacts/lists/${listId}/contacts`,
+      { headers: BREVO_HEADERS, params: { limit, offset, sort: 'desc' } }
+    );
 
     const contacts = res.data.contacts || [];
     if (contacts.length === 0) break;
 
-    allContacts = allContacts.concat(contacts);
+    for (const c of contacts) {
+      const email = c.email;
+      if (!email) continue;
+      total += 1;
+
+      try {
+        const full = await getContact(email);
+        const attrs = full.attributes || {};
+
+        if (attrs[attrName]) {
+          skipped += 1;
+          continue;
+        }
+
+        await markNotified(email, attrName, markTime);
+        updated += 1;
+        console.log(`   ✅ ${email}`);
+        await new Promise(r => setTimeout(r, 120));
+      } catch (err) {
+        console.error(`   ❌ ${email}:`, err.response?.data || err.message);
+      }
+    }
+
     offset += limit;
-
-    if (contacts.length < limit) break; // last page
+    if (contacts.length < limit) break;
+    await new Promise(r => setTimeout(r, 120));
   }
 
-  return allContacts;
+  console.log(`   Summary: ${total} total, ${updated} marked, ${skipped} already marked`);
 }
 
-async function backfill() {
-  console.log('🚀 Starting backfill of BREVO_ID for all contacts...\n');
+async function main() {
+  console.log('🚀 Starting one-time NOTIFIED_LIST backfill...');
 
-  const contacts = await getAllContacts();
-  console.log(`\n📊 Total contacts found: ${contacts.length}\n`);
-
-  let updated = 0;
-  let skipped = 0;
-  let failed  = 0;
-
-  for (const contact of contacts) {
-    const { id, email, attributes } = contact;
-
-    // Skip if already has BREVO_ID
-    if (attributes?.BREVO_ID) {
-      skipped++;
-      continue;
-    }
-
-    try {
-      await axios.put(
-        `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-        { attributes: { BREVO_ID: String(id) } },
-        { headers }
-      );
-      console.log(`✅ ${email} → BREVO_ID: ${id}`);
-      updated++;
-
-      // Small delay to avoid hitting API rate limits
-      await new Promise(r => setTimeout(r, 100));
-
-    } catch (err) {
-      console.error(`❌ Failed for ${email}:`, err.response?.data || err.message);
-      failed++;
-    }
+  for (const rule of LIST_RULES) {
+    await backfillList(rule);
   }
 
-  console.log(`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Updated : ${updated}
-⏭️  Skipped : ${skipped} (already had BREVO_ID)
-❌ Failed  : ${failed}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎉 Backfill complete!
-  `);
+  console.log('\n✅ Backfill complete.');
 }
 
-backfill().catch(err => {
-  console.error('Fatal error:', err.message);
+main().catch(err => {
+  console.error('❌ Backfill failed:', err.response?.data || err.message);
   process.exit(1);
 });
