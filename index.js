@@ -30,22 +30,13 @@ const LIST_RULES = [
   { listId: 78, templateId: 109, name: 'Solution Mid-Market' },
 ];
 
-// ─────────────────────────────────────────
-// listId → Brevo "resubmitted at" Text attribute, written by WordPress on every form
-// submission. Lets us tell a genuine resubmission apart from the contact's shared
-// modifiedAt being touched by an unrelated form. If a contact doesn't have a value in
-// this field yet (submitted before this system existed), the dedup check below falls
-// back to the original "notified once, skip forever" behaviour for that one contact
-// rather than risk a flood of re-notifications.
-//
-// listId 51 (Platform Signup Leads) is deliberately not in this map: accounts are
-// one-per-email, so a resubmission can never happen there — the original "notify
-// once, skip forever" check is already exactly correct for that list.
-// ─────────────────────────────────────────
+// listId → "resubmitted at" attribute (written by WP on each form submit).
+// Lets a resubmission re-notify instead of being skipped forever.
+// listId 51 (Platform Signup) excluded — one account per email, no resubmits.
 const RESUBMIT_FIELD_MAP = {
   38: 'RESUB_WHATSAPP',
   40: 'RESUB_CONTACT_SALES_JP',
-  41: 'RESUB_CONTACT_SALES_EN', // fed by [uxarmy_contact_us_en_form] (ResourceDownloadRoute.php)
+  41: 'RESUB_CONTACT_SALES_EN', // Global Leads, via [uxarmy_contact_us_en_form]
   42: 'RESUB_ENTERPRISE_CONTACT',
   46: 'RESUB_CONTACT_SALES_KR',
   55: 'RESUB_SURVEY',
@@ -63,10 +54,7 @@ const RESUBMIT_FIELD_MAP = {
   78: 'RESUB_MID_MARKET',
 };
 
-// ─────────────────────────────────────────
-// Category field maps (index → label)
-// Brevo stores category fields as numeric indexes internally
-// ─────────────────────────────────────────
+// Category field maps (Brevo stores these as numeric indexes)
 const UXA_SOURCE_MAP = {
   1: 'Platform Signup',
   2: 'Demo Form',
@@ -197,9 +185,7 @@ async function markNotifiedWithFallback(email, attrName, isoValue) {
   console.log(`   ℹ️  ${email} ${attrName} saved as date-only (${dateOnly})`);
 }
 
-// ─────────────────────────────────────────
-// SYNC 1: All new contacts → BREVO_ID + SMS
-// ─────────────────────────────────────────
+// SYNC 1: all new contacts → BREVO_ID + SMS
 async function syncAllNewContacts(since) {
 
   let allContacts = [];
@@ -261,9 +247,7 @@ async function syncAllNewContacts(since) {
   return failedCount + thrownFailures;
 }
 
-// ─────────────────────────────────────────
-// SYNC 2: List-specific → Send email template
-// ─────────────────────────────────────────
+// SYNC 2: list-specific → send email template
 async function syncListEmails(sinceMap, pollStartedAt) {
   const successfulLists = [];
 
@@ -296,6 +280,15 @@ async function syncListEmails(sinceMap, pollStartedAt) {
       await new Promise(r => setTimeout(r, 100));
     }
 
+    // modifiedAt can shift mid-pagination and duplicate a contact across pages — de-dupe
+    const seenEmails = new Set();
+    newContacts = newContacts.filter(c => {
+      const key = (c.email || '').toLowerCase();
+      if (!key || seenEmails.has(key)) return false;
+      seenEmails.add(key);
+      return true;
+    });
+
     console.log(`   List "${name}" (${listId}): ${newContacts.length} new contact(s) → Template ${templateId}`);
 
     try {
@@ -305,7 +298,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
         if (!email) return { ok: true, skipped: true };
 
         try {
-          // Fetch FULL contact details to get all attributes
+          // full contact details, not just the list-contact summary
           const fullRes = await http.get(
             `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`
           );
@@ -313,14 +306,13 @@ async function syncListEmails(sinceMap, pollStartedAt) {
           const attrs  = full.attributes || {};
           const fullId = full.id;
 
-          // Deduplicate per list — but a genuine resubmission should still notify again.
+          // already notified? only skip if not resubmitted since
           if (attrs[notifiedAttr]) {
             const resubField = RESUBMIT_FIELD_MAP[listId];
             const resubAt     = resubField ? attrs[resubField] : null;
 
             if (!resubAt) {
-              // No resubmit marker available for this contact/list yet — fall back to
-              // the original "notified once, skip forever" behaviour.
+              // no resubmit marker yet — skip forever (old behaviour)
               console.log(`   ⏭️  Skip ${email} — already notified for list ${listId}`);
               return { ok: true, skipped: true };
             }
@@ -330,7 +322,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
               return { ok: true, skipped: true };
             }
 
-            // Resubmitted after the last notification — fall through and notify again.
+            // resubmitted since last notification — notify again
             console.log(`   🔁 ${email} resubmitted list ${listId} since last notification — notifying again`);
           }
 
@@ -345,20 +337,20 @@ async function syncListEmails(sinceMap, pollStartedAt) {
               to: recipients,
               templateId,
               params: {
-                // ── Core identity fields (all templates) ──
+                // core fields (all templates)
                 FIRSTNAME:              attrs.FIRSTNAME || '',
                 LASTNAME:               attrs.LASTNAME  || '',
                 EMAIL:                  email           || '',
-                PHONE:                  attrs.SMS || attrs.MOBILEPHONENUMBER || '',
+                PHONE:                  attrs.PHONENUMBER || attrs.SMS || attrs.MOBILEPHONENUMBER || '',
                 MESSAGE:                attrs.ADDITIONAL_NOTES || '',
                 CONTACT_URL:            `https://app.brevo.com/contact/index/${fullId}`,
 
-                // ── Platform signup fields (category indexes → labels) ──
+                // platform signup fields
                 UXA_SOURCE:             resolveCategory(UXA_SOURCE_MAP,             attrs.UXA_SOURCE),
                 PLAN_NAME:              resolveCategory(PLAN_NAME_MAP,              attrs.PLAN_NAME),
                 PAYMENT_RECURRING_TYPE: resolveCategory(PAYMENT_RECURRING_TYPE_MAP, attrs.PAYMENT_RECURRING_TYPE),
 
-                // ── Solution / team / company page form fields (free text) ──
+                // solution/team page fields (free text)
                 COMPANYNAME:                  attrs.COMPANYNAME || '',
                 COUNTRY:                      attrs.COUNTRY || '',
                 BUSINESS_PROBLEM:             attrs.BUSINESS_PROBLEM || '',
@@ -371,7 +363,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
                 MARKETNG_QUESTION_DECISION:   attrs.MARKETNG_QUESTION_DECISION || '',
                 ANYTHING_ELSE_WE_SHOULD_KNOW: attrs.ANYTHING_ELSE_WE_SHOULD_KNOW || '',
 
-                // ── Solution / team / company page fields (category indexes → labels) ──
+                // solution/team page fields (category indexes)
                 TEAMSIZE:                     resolveCategory(TEAMSIZE_MAP,         attrs.TEAMSIZE),
                 BESTDESCRIBE:                 resolveCategory(BESTDESCRIBE_MAP,     attrs.BESTDESCRIBE),
                 STUDIES_TEAM_RUN:             resolveCategory(STUDIES_TEAM_RUN_MAP, attrs.STUDIES_TEAM_RUN),
@@ -409,9 +401,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
   return successfulLists;
 }
 
-// ─────────────────────────────────────────
 // Main poll
-// ─────────────────────────────────────────
 async function poll() {
   if (isPolling) {
     console.log('   ⏳ Previous poll still running, skipping this cycle.');
