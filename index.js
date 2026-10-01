@@ -160,29 +160,11 @@ LIST_RULES.forEach(r => {
 let lastCheckedAllContacts = state.lastCheckedAllContacts || DEFAULT_SINCE;
 let isPolling = false;
 
-function toDateOnly(isoValue) {
-  return String(isoValue || '').split('T')[0];
-}
-
-async function markNotifiedWithFallback(email, attrName, isoValue) {
-  try {
-    await http.put(
-      `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-      { attributes: { [attrName]: isoValue } }
-    );
-    return;
-  } catch (err) {
-    if (err?.response?.status !== 400) {
-      throw err;
-    }
-  }
-
-  const dateOnly = toDateOnly(isoValue);
+async function markNotified(email, attrName, isoValue) {
   await http.put(
     `https://api.brevo.com/v3/contacts/${encodeURIComponent(email)}`,
-    { attributes: { [attrName]: dateOnly } }
+    { attributes: { [attrName]: isoValue } }
   );
-  console.log(`   ℹ️  ${email} ${attrName} saved as date-only (${dateOnly})`);
 }
 
 // SYNC 1: all new contacts → BREVO_ID + SMS
@@ -372,7 +354,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
             { __retryable: false }
           );
 
-          await markNotifiedWithFallback(email, notifiedAttr, pollStartedAt);
+          await markNotified(email, notifiedAttr, pollStartedAt);
 
           console.log(`   📧 Email sent for ${email} → ${attrs.FIRSTNAME} ${attrs.LASTNAME} (sender: ${SENDER_EMAIL})`);
           await new Promise(r => setTimeout(r, 150));
