@@ -31,6 +31,39 @@ const LIST_RULES = [
 ];
 
 // ─────────────────────────────────────────
+// listId → Brevo "resubmitted at" Text attribute, written by WordPress on every form
+// submission. Lets us tell a genuine resubmission apart from the contact's shared
+// modifiedAt being touched by an unrelated form. If a contact doesn't have a value in
+// this field yet (submitted before this system existed), the dedup check below falls
+// back to the original "notified once, skip forever" behaviour for that one contact
+// rather than risk a flood of re-notifications.
+//
+// listId 51 (Platform Signup Leads) is deliberately not in this map: accounts are
+// one-per-email, so a resubmission can never happen there — the original "notify
+// once, skip forever" check is already exactly correct for that list.
+// ─────────────────────────────────────────
+const RESUBMIT_FIELD_MAP = {
+  38: 'RESUB_WHATSAPP',
+  40: 'RESUB_CONTACT_SALES_JP',
+  41: 'RESUB_CONTACT_SALES_EN', // fed by [uxarmy_contact_us_en_form] (ResourceDownloadRoute.php)
+  42: 'RESUB_ENTERPRISE_CONTACT',
+  46: 'RESUB_CONTACT_SALES_KR',
+  55: 'RESUB_SURVEY',
+  56: 'RESUB_SURVEY_BRIEF',
+  57: 'RESUB_RESEARCH_INFRA',
+  58: 'RESUB_MANAGED_RESEARCHOPS',
+  59: 'RESUB_MARKET_RESEARCH',
+  69: 'RESUB_PRODUCT_MANAGER',
+  72: 'RESUB_PRODUCT_DESIGNER',
+  73: 'RESUB_USER_RESEARCHER',
+  74: 'RESUB_MARKETING_MANAGER',
+  75: 'RESUB_ENTERPRISE_SOLUTION',
+  76: 'RESUB_STARTUPS',
+  77: 'RESUB_SMALL_BUSINESS',
+  78: 'RESUB_MID_MARKET',
+};
+
+// ─────────────────────────────────────────
 // Category field maps (index → label)
 // Brevo stores category fields as numeric indexes internally
 // ─────────────────────────────────────────
@@ -280,10 +313,25 @@ async function syncListEmails(sinceMap, pollStartedAt) {
           const attrs  = full.attributes || {};
           const fullId = full.id;
 
-          // Deduplicate per list: once notified for this list, skip forever.
+          // Deduplicate per list — but a genuine resubmission should still notify again.
           if (attrs[notifiedAttr]) {
-            console.log(`   ⏭️  Skip ${email} — already notified for list ${listId}`);
-            return { ok: true, skipped: true };
+            const resubField = RESUBMIT_FIELD_MAP[listId];
+            const resubAt     = resubField ? attrs[resubField] : null;
+
+            if (!resubAt) {
+              // No resubmit marker available for this contact/list yet — fall back to
+              // the original "notified once, skip forever" behaviour.
+              console.log(`   ⏭️  Skip ${email} — already notified for list ${listId}`);
+              return { ok: true, skipped: true };
+            }
+
+            if (new Date(attrs[notifiedAttr]) >= new Date(resubAt)) {
+              console.log(`   ⏭️  Skip ${email} — already notified for the latest submission to list ${listId}`);
+              return { ok: true, skipped: true };
+            }
+
+            // Resubmitted after the last notification — fall through and notify again.
+            console.log(`   🔁 ${email} resubmitted list ${listId} since last notification — notifying again`);
           }
 
           const recipients = notifyEmails.map((address) => ({ name: makeNameFromEmail(address), email: address }));
