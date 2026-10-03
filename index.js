@@ -8,6 +8,9 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const NOTIFY_EMAIL   = process.env.NOTIFY_EMAIL;
 const SENDER_EMAIL   = process.env.SENDER_EMAIL;
 
+// daily QA automation fills every form with this email — never notify the team for it
+const QA_TEST_EMAIL = 'your-approved-qa-ayush@uxarmy.com';
+
 const LIST_RULES = [
   { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
   { listId: 40, templateId: 88, name: 'Japanese Leads' },
@@ -278,6 +281,11 @@ async function syncListEmails(sinceMap, pollStartedAt) {
       const workerResults = await mapWithConcurrency(newContacts, WORKER_CONCURRENCY, async (contact) => {
         const { email } = contact;
         if (!email) return { ok: true, skipped: true };
+
+        if (email.toLowerCase() === QA_TEST_EMAIL) {
+          console.log(`   🧪 Skip ${email} — QA test account, no notification`);
+          return { ok: true, skipped: true };
+        }
 
         try {
           // full contact details, not just the list-contact summary
