@@ -8,8 +8,9 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const NOTIFY_EMAIL   = process.env.NOTIFY_EMAIL;
 const SENDER_EMAIL   = process.env.SENDER_EMAIL;
 
-// daily QA automation fills every form with this email — never notify the team for it
+// daily QA automation fills every form with this email — notify only QA_NOTIFY_EMAIL, not the whole team
 const QA_TEST_EMAIL = 'your-approved-qa-ayush@uxarmy.com';
+const QA_NOTIFY_EMAIL = 'sid@uxarmy.com';
 
 const LIST_RULES = [
   { listId: 38, templateId: 90, name: 'WhatsApp Reachout Leads' },
@@ -61,7 +62,13 @@ const RESUBMIT_FIELD_MAP = {
 const UXA_SOURCE_MAP = {
   1: 'Platform Signup',
   2: 'Demo Form',
+  3: 'Website',
 };
+
+// Team only gets leads whose UXA_SOURCE is Website.
+// listId 51 (Platform Signup) exempt — those contacts carry UXA_SOURCE = Platform Signup.
+const REQUIRED_UXA_SOURCE = 'Website';
+const UXA_SOURCE_EXEMPT_LISTS = new Set([51]);
 
 const PLAN_NAME_MAP = {
   1: 'Free',
@@ -282,10 +289,7 @@ async function syncListEmails(sinceMap, pollStartedAt) {
         const { email } = contact;
         if (!email) return { ok: true, skipped: true };
 
-        if (email.toLowerCase() === QA_TEST_EMAIL) {
-          console.log(`   🧪 Skip ${email} — QA test account, no notification`);
-          return { ok: true, skipped: true };
-        }
+        const isQaTest = email.toLowerCase() === QA_TEST_EMAIL;
 
         try {
           // full contact details, not just the list-contact summary
@@ -295,6 +299,15 @@ async function syncListEmails(sinceMap, pollStartedAt) {
           const full   = fullRes.data;
           const attrs  = full.attributes || {};
           const fullId = full.id;
+
+          // QA lead always goes to QA_NOTIFY_EMAIL, regardless of source
+          if (!isQaTest && !UXA_SOURCE_EXEMPT_LISTS.has(listId)) {
+            const source = resolveCategory(UXA_SOURCE_MAP, attrs.UXA_SOURCE);
+            if (source !== REQUIRED_UXA_SOURCE) {
+              console.log(`   🚫 Skip ${email} — UXA_SOURCE is "${source || 'empty'}", not ${REQUIRED_UXA_SOURCE}`);
+              return { ok: true, skipped: true };
+            }
+          }
 
           // already notified? only skip if not resubmitted since
           if (attrs[notifiedAttr]) {
@@ -316,7 +329,9 @@ async function syncListEmails(sinceMap, pollStartedAt) {
             console.log(`   🔁 ${email} resubmitted list ${listId} since last notification — notifying again`);
           }
 
-          const recipients = notifyEmails.map((address) => ({ name: makeNameFromEmail(address), email: address }));
+          const recipientEmails = isQaTest ? [QA_NOTIFY_EMAIL] : notifyEmails;
+          if (isQaTest) console.log(`   🧪 ${email} is the QA test account — notifying ${QA_NOTIFY_EMAIL} only`);
+          const recipients = recipientEmails.map((address) => ({ name: makeNameFromEmail(address), email: address }));
 
           const sender = { name: 'UXArmy', email: SENDER_EMAIL };
 
